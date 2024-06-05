@@ -1,0 +1,26 @@
+[project]
+name = "orm-example"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "Krzysztof Stronka", email = "kstronka@apptension.com"},
+]
+dependencies = [
+    "django>=5.0.6",
+    "django-environ>=0.11.2",
+    "django-rest-framework>=0.1.0",
+    "django-extensions>=3.2.3",
+    "djangorestframework-simplejwt>=5.3.1",
+]
+requires-python = "==3.12.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "Faker>=25.5.0",
+]

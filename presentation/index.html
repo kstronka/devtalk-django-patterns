@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Title</title>
+    <meta charset="utf-8">
+    <style>
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      :root {
+          --brblack: #002b36;
+          --black: #073642;
+          --brwhite: #fdf6e3;
+          --white: #eee8d5;
+          --magenta: #d33682;
+          --brmagenta: #6c71c4;
+          --bryellow: #657b83;
+          --cyan: #2aa198;
+      }
+
+      body {
+          font-family: 'Droid Serif';
+      }
+
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      figcaption {
+        color: gray;
+        font-size: 12px;
+      }
+
+      .hljs.remark-code {
+          border-radius: 10px;
+          align-self: center;
+          vertical-align: middle;
+
+          background: var(--brblack);
+          color: var(--brwhite);
+
+          .hljs-keyword {
+              color: var(--brmagenta);
+          }
+          .hljs-title {
+              color: var(--magenta);
+          }
+          .hljs-string {
+              color: var(--cyan);
+          }
+
+          .hljs-meta {
+              color: salmon;
+          }
+      }
+
+      .black-theme {
+          background-color: var(--black);
+          color: var(--brwhite);
+
+          h2, h3 {
+              color: var(--bryellow);
+          }
+      }
+
+      .light-theme {
+          .remark-inline-code {
+              color: var(--magenta);
+          }
+
+          background-color: var(--brwhite);
+          color: var(--black);
+
+          h1 {
+              color: var(--brblack);
+          }
+
+          h2, h2 {
+              color: var(--bryellow);
+          }
+
+          a {
+              text-decoration: none;
+              color: var(--cyan);
+              font-style: oblique;
+              font-family: monospace;
+          }
+
+          .quote {
+              color: var(--bryellow);
+              font-style: italic;
+              font-size: 22px;
+              text-justify: newspaper;
+              border-left: 4px solid var(--magenta);
+              padding-left: 15px;
+          }
+
+          .text-large {
+              font-size: 22px;
+          }
+      }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+        class: center, middle, black-theme
+
+        # Django Design Patterns
+        ## Good practices... and beyond 🤯
+
+        ---
+        class: light-theme
+
+        # .center[Agenda]
+
+        ???
+        AKA: What you'll lean
+
+        --
+        count: false
+
+        1. Django best practices - quick recap
+        --
+        count: false
+
+        2. Common problems in modern projects
+        --
+        count: false
+
+        3. Proposed solutions
+        ---
+        class: light-theme
+
+        # .center[System in question]
+
+        During this talk we'll consider a simple order management system
+        for some imaginary e-commerce business.
+
+        --
+        count: false
+
+        We will consider a user scenario of creating an order, represented by 
+        an `Order` model.
+
+        --
+        count: false
+
+        Then we'll see how the requirements will grow with time. We'll apply some tactics to further manage complexity.
+
+        ---
+        class: light-theme
+
+        # .center[Order placement]
+
+        --
+        count: false
+        - The user fills a form on the website,
+
+        --
+        count: false
+        - Product and quatity is selected,
+
+        --
+        count: false
+        - An order is being created,
+
+
+        --
+        count: false
+        - Email with order confirmation is being sent,
+
+        --
+        count: false
+        - A CRM event is being emitted
+
+        --
+        count: false 
+        - Order count on the `Product` model is updated
+
+        ---
+        class: light-theme
+        
+        # .center[Examples - what not to do!]
+
+        ```python
+        @login_required
+        def order(request):
+            if request.method == 'POST':
+                form = OrderForm(request.POST)
+
+                if form.is_valid():
+                    Order(
+                        user=request.user,
+                        product=form.cleaned_data['product'],
+                        quantity=form.cleaned_data['quantity'],
+                    )
+                    order.save()
+                    
+                    # ... send confirmation email here
+                    # ... send CRM event here
+
+                    product.orders_count += 1
+                    product.save()
+                    return redirect('order_success') 
+            else:
+                form = OrderForm()
+
+            return render(request, 'order.html', {'form': form})
+        ```
+
+        ???
+        Why?
+        - Mixed concerns - rendering with processing orders
+        - No transaction isolation
+        - Hard to reuse code for order placement
+        - Looks ugly TBH
+        - And yet we've only considered a sunny case scenario
+        ---
+        class: light-theme
+        
+        # .center[Examples - what not to do - DRF edition]
+
+        ```python
+        class OrderViewSet(viewsets.ModelViewSet):
+            queryset = Order.objects.all()
+            serializer_class = OrderSerializer
+            permission_classes = [permissions.IsAuthenticated]
+
+            def perform_create(self, serializer):
+                serializer.save(user=self.request.user)
+                # ... send email
+                # ... send crm event
+
+                product.orders_count += 1
+                product.save()
+        ```
+
+        ???
+        Why?
+        While not as ugly it still lacks isolation and it's hard to reuse.
+        There are some side effects to the serializer.
+        ---
+        class: light-theme
+
+        # .center[Best practices to the rescue!]
+
+        --
+        count: false
+
+        1. Write fat models
+        --
+        count: false
+
+        2. Maintain managers
+        --
+        count: false
+
+        3. Keep the apps small
+        --
+        count: false
+        
+        4. Keep the views skinny
+        --
+        count: false
+
+        5. Use DRF for REST endpoints
+
+        ---
+        class: light-theme
+
+        # .center[Applying the best practices]
+        ## .center[AKA: The good enough solution]
+        ### A thin view:
+
+        ```python
+        # views.py
+
+        class OrderViewSet(viewsets.ModelViewSet):
+            queryset = Order.objects.all()
+            serializer_class = OrderSerializer
+            permission_classes = [permissions.IsAuthenticated]
+        ```
+
+        ---
+        class: light-theme
+        ### A serializer:
+        
+        ```python
+        # serializers.py
+
+        class OrderSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Order
+                fields = ['product', 'quantity']
+
+            def create(self, validated_data):
+                return Order.objects.place_order(
+                    user=self.context['request'].user,
+                    **validated_data,
+                )
+        ```
+        ---
+        class: light-theme
+        ### A fat model (layer):
+
+        ```python
+        # models.py        
+
+        class OrderManager(models.Manger):
+            def place_order(self, user, product, quantity):
+                order = self.create(
+                    user=user,
+                    product=product,
+                    quantity=quantity,
+                )
+                
+                send_mail(
+                    'Order Confirmation',
+                    f'... order details ...',
+                    [user.email],
+                )
+            
+                send_crm_event('order_created', order)
+            
+                return order
+        ```
+
+        ???
+        What did we gain?
+        - Separation of concerns
+        - Clear definition of the view set
+        - Clear definition of a serializer
+        - Business logic in the model layer can be reused with ease
+        ---
+        class: light-theme
+        # .center[💥 Business requirements - round two 💥]
+        ## .center[How they're always after breaking our pretty code...]
+
+        ### Some new business requirements just came in:
+        --
+        count: false
+        - We now need to check against available stocks,        
+       
+        --
+        count: false
+        - We need to post the order to a WMS system,
+
+        --
+        count: false
+        - If the WMS order passed, we need to update reservations on stock our side
+
+        --
+        count: false
+        - If stocks aren't available we need to correct stocks our side
+
+        --
+        count: false
+        - Additionally we need to notify the allocation team to decide whether to order more stock
+
+        ---
+        class: light-theme
+
+        
+        ```python
+        # serializers.py
+
+        class OrderSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Order
+                fields = ['product', 'quantity']
+
+            default_validation_errors = {
+                'out_of_stock': _('Product is out of stock'),
+            }
+
+            def validate(attrs):
+                stock = Stock.objects.for_product(attrs['product'])
+
+                if not stock:
+                    self.fail('out_of_stock')
+
+                stock_available = stock.quantity - stock.reserved_quantity
+                
+                if stock_available < attrs['quantity']: 
+                   self.fail('out_of_stock')
+
+                return attrs
+
+            def create(self, validated_data):
+                return Order.objects.place_order(...)
+        ```
+
+        ---
+        class: light-theme
+        
+        ```python
+        # models.py        
+
+        class OrderManager(models.Manger):
+            def place_order(self, user, product, quantity):
+                order = self.create(
+                    user=user,
+                    product=product,
+                    quantity=quantity,
+                )
+
+                stock = Stock.objects.for_product(product) 
+
+                wms_order = send_wms_order(user.email, order)
+                if not wms_order['success']:
+                    stock.quantity = query_wms_stock(product)
+                    stock.save()
+
+                    order.delete() 
+                    notify_allocation_team(product, stock)
+                    send_crm_event('order_failed', order)
+                    return None
+
+                stock.reserved_quantity += order.quantity
+                stock.save()
+
+                send_mail(...)
+                send_crm_event('order_created', order)
+                return order
+        ```
+
+        ???
+        - Issues start to pile up
+        - Transaction isolation
+        - Can return none - needs to be handled downsteram
+        - Loads of side effects and updates of unrelated models
+        - External API calls - testing is a pain
+        - Serializer validation is in fact part of the business logic, 
+            because `place_order`, when run on it's own, shoud fail if there's 
+            shortage of stock, right? Would mean the reusability starts to go out of the window.
+        - Actual robust code would take even more space
+
+        ---
+        class: light-theme
+        
+        # .center[What do we do now?]
+        
+        ♻️  We will now perform some refactoring.
+
+        💡 Then we will identify some rules applied during the process and discuss them
+        ---
+        class: light-theme
+        
+        # .center[When fat models become too fat]
+
+        Let's try to move the logic somwhere else for the time being.
+
+        We'll introduce a `services` package within the app:
+
+        ```
+        config/
+        orders/
+        | __pycache__/
+        | migrations/
+        | services/
+        | | __init__.py
+        | | order.py
+        | __init__.py
+        | admin.py
+        | apps.py
+        | models.py
+        | serializers.py
+        | tests.py
+        | urls.py
+        | views.py
+        ```
+
+        ---
+        class: light-theme
+        
+        We copied the code over to services:
+
+        ```python
+        # services/order.py
+
+        def place_order(user, product: Product, quantity: int):
+            order = Order.objects.create(
+                user=user,
+                product=product,
+                quantity=quantity,
+            )
+
+            stock = Stock.objects.for_product(product)
+
+            wms_order = send_wms_order(user.email, order)
+
+            if not wms_order['success']:
+                stock.quantity = query_wms_stock(product, stock)
+                stock.save()
+
+                notify_allocation_team(product, stock)
+                send_crm_event('order_failed', order)
+                return None
+
+            stock.reserved_quantity += order.quantity
+            stock.save()
+
+            send_mail(user.email, 'Your order was placed')
+            send_crm_event('order_created', order)
+
+            return order
+        ```
+        
+
+
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create();
+    </script>
+  </body>
+</html>
