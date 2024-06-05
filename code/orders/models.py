@@ -1,4 +1,8 @@
+from tinyinject import di
 from django.db import models
+from .services.protocols import PlaceOrder
+from .services.protocols import ReserveStock
+from .services.protocols import ReconcilliateStock
 
 
 class Product(models.Model):
@@ -7,6 +11,15 @@ class Product(models.Model):
 
     def __str__(self):
         return f'{self.name} {self.ean}'
+
+    @di.require_kwargs(service=ReserveStock)
+    def reserve(self, quantity: int, *, service: ReserveStock) -> 'Stock':
+        return service(self, quantity)
+
+
+    @di.require_kwargs(service=ReconcilliateStock)
+    def reconcilliate(self, quantity: int, *, service: ReserveStock) -> 'Stock':
+        return service(self, quantity)
 
 
 class StockManager(models.Manager):
@@ -28,3 +41,7 @@ class Order(models.Model):
     product = models.ForeignKey('orders.Product', on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=0)
 
+    @di.require_kwargs(service=PlaceOrder)
+    def place(cls, user, product: 'Product', quantity: int, *, service: PlaceOrder):
+        return service(user, product, quantity)
+        

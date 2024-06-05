@@ -506,7 +506,297 @@
 
             return order
         ```
+        ---
+        class: light-theme
+
+        While the serializer unsurprisingly looks like this:
+
+        ```python
+        # serializers.py
+
+        class OrderSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Order
+                fields = ['product', 'quantity']
+
+            def validate(attrs):
+                stock = Stock.objects.for_product(attrs['product'])
+
+                if not stock:
+                    self.fail('out_of_stock')
+
+                stock_available = stock.quantity - stock.reserved_quantity
+                
+                if stock_available < attrs['quantity']: 
+                   self.fail('out_of_stock')
+
+                return attrs
+            def create(self, validated_data):
+                return place_order(
+                    user=self.context['request'].user,
+                    **validated_data,
+                )
+        ```
+        ---
+        class: light-theme
         
+        # .center[Chopping it all up]
+
+        If we look more closely we may recognize some sub-actions within `place_order` which can similarily be expressed in the language of the business domain.
+
+        Let's see what they are:
+        --
+        count: false
+
+        One we may refer to as stock reservation:
+        
+        ```python
+        stock = Stock.objects.for_product(product)
+        # ...
+        stock.reserved_quantity += order.quantity
+        stock.save()
+        ```
+
+        --
+        count: false
+        
+        While the other we can call stock reconcilliation:
+        ```python
+        stock = Stock.objects.for_product(product)
+        # ...
+        stock.quantity = query_wms_stock(product, stock)
+        stock.save()
+        ```
+        ---
+        class: light-theme
+
+        We will leverage that natural division and refactor to another module within the `services` package.
+        Arbitrarily we will put those in the `product` module.
+
+        ```python
+        # orders/services/product.py
+        def reserve_stock(product: Product, quantity: int) -> Stock:
+            stock: Stock = product.stock
+
+            stock.reserved_quantity += quantity
+            stock.save()
+
+            return stock
+
+
+        def reconcilliate_stock(product: Product) -> Stock:
+            stock.quantity = query_wms_stock(product, stock)
+            stock.save()
+
+            notify_allocation_team(product, stock)
+            return stock
+
+        ```
+        
+        ---
+        class: light-theme
+        
+        The `place_order` function looks like that now: 
+    
+        ```python
+        def place_order(user, product: Product, quantity: int):
+            order = Order.objects.create(
+                user=user,
+                product=product,
+                quantity=quantity,
+            )
+
+            wms_order = send_wms_order(user.email, order)
+
+            if not wms_order['success']:
+                reconcilliate_stock(product)
+
+                send_crm_event('order_failed', order)
+                return None
+
+            reserve_stock(product, quantity)
+
+            send_mail(user.email, 'Your order was placed')
+            send_crm_event('order_created', order)
+
+            return order
+        ```
+        --
+        count: false
+        
+        Marginally better.
+
+        ---
+        class: light-theme
+
+        # .center[Fixing the inconvenience]
+
+        We made our models less fat, and code a tiny bit more ordered. It came at a price of how expressive the model was. Can we do better?
+
+        --
+        count: false
+
+        Of course! How?
+
+
+        --
+        count: false
+
+        # .center[🥁🥁🥁]
+
+        --
+        count: false
+        
+        ### .center[🚀 Dependency injection to the rescue!]
+
+        --
+        count: false
+
+        While at that, we will introduce an architectural boundary separating the models from the business logic.
+
+        ---
+        class: light-theme
+
+        We will introduce protocols:
+        
+        ```python
+        # orders/services/protocols.py
+
+        class PlaceOrder(Protocol):
+            def __call__(
+                self, user: 'User', product: 'Product', quantity: int
+            ) -> Union['Order', None]:
+                ...
+
+
+        class ReserveStock(Protocol):
+            def __call__(
+                self, product: 'Product', quantity: int
+            ) -> 'Stock':
+                ...
+
+
+        class ReconcilliateStock(Protocol):
+            def __call__(self, product: 'Product') -> 'Stock':
+                ...
+
+        ```
+        ---
+        class: light-theme
+
+        Make the functions implement those:
+        
+        ```python
+        # orders/services/order.py
+
+        @di.implements(interface=PlaceOrder)
+        def place_order(user, product: Product, quantity: int):
+            order = Order.objects.create(
+                user=user,
+                product=product,
+                quantity=quantity,
+            )
+
+            wms_order = send_wms_order(user.email, order)
+
+            if not wms_order['success']:
+                reconcilliate_stock(product)
+
+                send_crm_event('order_failed', order)
+                return None
+
+            reserve_stock(product, quantity)
+
+            send_mail(user.email, 'Your order was placed')
+            send_crm_event('order_created', order)
+
+            return order
+        ```
+        ---
+        class: light-theme
+
+        Same goes for product:
+
+        ```python
+        # orders/services/product.py
+
+        @di.implements(interface=ReserveStock)
+        def reserve_stock(product: Product, quantity: int) -> Stock:
+            stock: Stock = product.stock
+
+            stock.reserved_quantity += quantity
+            stock.save()
+
+            return stock
+
+
+        @di.implements(interface=ReconcilliateStock)
+        def reconcilliate_stock(product: Product) -> Stock:
+            stock.quantity = query_wms_stock(product, stock)
+            stock.save()
+
+            notify_allocation_team(product, stock)
+            return stock
+
+        ```
+        ---
+        class: light-theme
+        
+        Now, all that's left is to inject back on the models:
+        
+        ```python
+        class Product(models.Model):
+            ean = models.CharField(max_length=13)
+            name = models.CharField(max_length=50)
+
+            def __str__(self):
+                return f'{self.name} {self.ean}'
+
+            @di.require_kwargs(service=ReserveStock)
+            def reserve(
+                self, quantity: int, *, service: ReserveStock
+            ) -> 'Stock':
+                return service(self, quantity)
+
+
+            @di.require_kwargs(service=ReconcilliateStock)
+            def reconcilliate(
+                self, quantity: int, *, service: ReserveStock
+            ) -> 'Stock':
+                return service(self, quantity)
+        ```
+
+        ---
+        class: light-theme
+
+        ```python
+        class Order(models.Model):
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            product = models.ForeignKey(
+                'orders.Product', on_delete=models.CASCADE
+            )
+            quantity = models.PositiveIntegerField(default=0)
+
+            @di.require_kwargs(service=PlaceOrder)
+            def place(
+                cls, 
+                user, 
+                product: 'Product', 
+                quantity: int, 
+                *, 
+                service: PlaceOrder,
+            ):
+                return service(user, product, quantity)
+        ```
+
+        ---
+        class: light-theme
+        # .center[Reaping the benefits]
+
+        Let's see how the `place_order` service looks like right now:
+        
+        ```python
+        ```
 
 
     </textarea>

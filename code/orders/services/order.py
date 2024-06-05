@@ -1,7 +1,12 @@
+from tinyinject import di
 from orders.models import Order
 from orders.models import Product
 from orders.models import Stock
 from orders.models import StockManager
+from .product import reserve_stock
+from .product import reconcilliate_stock
+
+from .protocols import PlaceOrder
 
 
 def send_wms_order(email, order):
@@ -9,17 +14,6 @@ def send_wms_order(email, order):
     return {
         'success': True,
     }
-    
-
-def query_wms_stock(product, stock):
-    # placeholder
-    return stock.quantity
-
-
-def notify_allocation_team(product, stock):
-    # placeholder
-    # send message that stocks are going low
-    return
 
 
 def send_crm_event(message, obj):
@@ -32,6 +26,7 @@ def send_mail(recipient, message):
     return
 
 
+@di.implements(interface=PlaceOrder)
 def place_order(user, product: Product, quantity: int):
     order = Order.objects.create(
         user=user,
@@ -39,20 +34,15 @@ def place_order(user, product: Product, quantity: int):
         quantity=quantity,
     )
 
-    stock = Stock.objects.for_product(product)
-
     wms_order = send_wms_order(user.email, order)
 
     if not wms_order['success']:
-        stock.quantity = query_wms_stock(product, stock)
-        stock.save()
+        product.reconcilliate()
 
-        notify_allocation_team(product, stock)
         send_crm_event('order_failed', order)
         return None
 
-    stock.reserved_quantity += order.quantity
-    stock.save()
+    product.reserve(quantity)
 
     send_mail(user.email, 'Your order was placed')
     send_crm_event('order_created', order)
