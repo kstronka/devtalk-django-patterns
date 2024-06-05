@@ -6,4 +6,5 @@ class OrdersConfig(AppConfig):
     name = "orders"
 
     def ready(self):
-        from .services import protocols  # noqa
+        from .services import order  # noqa
+        from .services import product  # noqa

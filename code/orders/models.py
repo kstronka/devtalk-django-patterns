@@ -41,6 +41,7 @@ class Order(models.Model):
     product = models.ForeignKey('orders.Product', on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=0)
 
+    @classmethod
     @di.require_kwargs(service=PlaceOrder)
     def place(cls, user, product: 'Product', quantity: int, *, service: PlaceOrder):
         return service(user, product, quantity)

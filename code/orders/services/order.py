@@ -3,8 +3,6 @@ from orders.models import Order
 from orders.models import Product
 from orders.models import Stock
 from orders.models import StockManager
-from .product import reserve_stock
-from .product import reconcilliate_stock
 
 from .protocols import PlaceOrder
 

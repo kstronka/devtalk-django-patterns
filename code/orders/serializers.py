@@ -1,5 +1,4 @@
 from rest_framework import serializers
-from orders.services.order import place_order
 
 from orders.models import Product
 from orders.models import Stock
@@ -12,7 +11,7 @@ class OrderSerializer(serializers.ModelSerializer):
         fields = ['product', 'quantity']
 
     def create(self, validated_data):
-        return place_order(
+        return Order.place(
             user=self.context['request'].user,
             **validated_data,
         )

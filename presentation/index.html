@@ -531,6 +531,7 @@
                    self.fail('out_of_stock')
 
                 return attrs
+
             def create(self, validated_data):
                 return place_order(
                     user=self.context['request'].user,
@@ -777,6 +778,7 @@
             )
             quantity = models.PositiveIntegerField(default=0)
 
+            @classmethod
             @di.require_kwargs(service=PlaceOrder)
             def place(
                 cls, 
@@ -796,8 +798,116 @@
         Let's see how the `place_order` service looks like right now:
         
         ```python
+        # orders/services/order.py
+
+        @di.implements(interface=PlaceOrder)
+        def place_order(user, product: Product, quantity: int):
+            order = Order.objects.create( 
+                user=user, product=product, quantity=quantity
+            )
+
+            wms_order = send_wms_order(user.email, order)
+
+            if not wms_order['success']:
+                product.reconcilliate()
+
+                send_crm_event('order_failed', order)
+                return None
+
+            product.reserve(quantity)
+
+            send_mail(user.email, 'Your order was placed')
+            send_crm_event('order_created', order)
+
+            return order
         ```
 
+        ---
+        class: light-theme
+
+        ```python
+        # orders/serializer.py
+
+        class OrderSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Order
+                fields = ['product', 'quantity']
+
+            def validate(attrs):
+                stock = Stock.objects.for_product(attrs['product'])
+
+                if not stock:
+                    self.fail('out_of_stock')
+
+                stock_available = stock.quantity - stock.reserved_quantity
+                
+                if stock_available < attrs['quantity']: 
+                   self.fail('out_of_stock')
+
+                return attrs
+
+            def create(self, validated_data):
+                return Order.place(
+                    user=self.context['request'].user,
+                    **validated_data,
+                )
+
+        ``` 
+
+        ---
+        class: light-theme
+        
+        # .center[What we've gained so far]
+
+        --
+        count: false
+        - Made models an entrypoint for all business ops
+
+        --
+        count: false
+        - Maintained reasonable code split, no more >1k LOC models.py anymore
+
+        --
+        count: false
+        - Somewhat decoupled business logic from the ORM layer
+
+        ???
+        - The service still depends on the ORM layer, but we could easily make it not depend upon it should we need it to
+        - The implementations are easily swappable        
+
+        ---
+        class: light-theme
+
+        # .center[To the point of reusability]
+
+        All the logic is neatly contained within the service layer. Theoretically that's the point of the "fat models" doctrine.
+        
+        But if we were to receive orders from a different place than api? 
+
+        Better yet, if our manager came and said that we're expanding our business
+        and on top of SIO orders we need to now support MIO orders and we would have to define MIO order reusing our code?
+
+        --
+        count: false
+        🤔 Can we? 
+
+        --
+        count: false
+        💥 Dang it! Validation stayed in the serializer so it's not equivalent! Was it all for nothing?
+
+        --
+        count: false
+        Of course not!
+
+        ---
+        class: light-theme
+
+        # .center[Saving the day with exceptions]
+        
+        ## .center[Other take at validation]
+        
+
+        
 
     </textarea>
     <script src="https://remarkjs.com/downloads/remark-latest.min.js">
