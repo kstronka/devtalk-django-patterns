@@ -407,9 +407,9 @@
 
                 stock = Stock.objects.for_product(product) 
 
-                wms_order = send_wms_order(user.email, order)
+                wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
                 if not wms_order['success']:
-                    stock.quantity = query_wms_stock(product)
+                    stock.quantity = query_wms_stock(product.ean)
                     stock.save()
 
                     order.delete() 
@@ -456,7 +456,6 @@
         ```
         config/
         orders/
-        | __pycache__/
         | migrations/
         | services/
         | | __init__.py
@@ -488,10 +487,10 @@
 
             stock = Stock.objects.for_product(product)
 
-            wms_order = send_wms_order(user.email, order)
+            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
 
             if not wms_order['success']:
-                stock.quantity = query_wms_stock(product, stock)
+                stock.quantity = query_wms_stock(product.ean)
                 stock.save()
 
                 notify_allocation_team(product, stock)
@@ -565,7 +564,7 @@
         ```python
         stock = Stock.objects.for_product(product)
         # ...
-        stock.quantity = query_wms_stock(product, stock)
+        stock.quantity = query_wms_stock(product.ean)
         stock.save()
         ```
         ---
@@ -586,7 +585,7 @@
 
 
         def reconcilliate_stock(product: Product) -> Stock:
-            stock.quantity = query_wms_stock(product, stock)
+            stock.quantity = query_wms_stock(product.ean)
             stock.save()
 
             notify_allocation_team(product, stock)
@@ -607,7 +606,7 @@
                 quantity=quantity,
             )
 
-            wms_order = send_wms_order(user.email, order)
+            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
 
             if not wms_order['success']:
                 reconcilliate_stock(product)
@@ -698,7 +697,7 @@
                 quantity=quantity,
             )
 
-            wms_order = send_wms_order(user.email, order)
+            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
 
             if not wms_order['success']:
                 reconcilliate_stock(product)
@@ -733,7 +732,8 @@
 
         @di.implements(interface=ReconcilliateStock)
         def reconcilliate_stock(product: Product) -> Stock:
-            stock.quantity = query_wms_stock(product, stock)
+            stock: Stock = product.stock
+            stock.quantity = query_wms_stock(product.ean)
             stock.save()
 
             notify_allocation_team(product, stock)
@@ -806,7 +806,7 @@
                 user=user, product=product, quantity=quantity
             )
 
-            wms_order = send_wms_order(user.email, order)
+            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
 
             if not wms_order['success']:
                 product.reconcilliate()
@@ -906,8 +906,296 @@
         
         ## .center[Other take at validation]
         
-
+        We'll adjust the validation approach slightly and leverage two things:
         
+        --
+        count: false
+        - Custom base exception
+
+        --
+        count: false
+        - Transaction isolation
+
+        ---
+        class: light-theme
+
+        # .center[The domain exception]
+
+        We'll create a custom exception class
+
+        ```python
+        # config/errors.py
+        import inflection
+
+
+        class DomainException(Exception):
+            @property
+            def code(self):
+                return inflection.underscore(self.__class__.__name__)
+                
+        ```
+
+        ---
+        class: light-theme
+
+        We'll catch the exception within the endpoint*:
+
+        ```python
+        # orders/views.py
+
+        class OrderViewSet(viewsets.ModelViewSet):
+            queryset = Order.objects.all()
+            serializer_class = OrderSerializer
+            permission_classes = [permissions.IsAuthenticated]
+
+            @transaction.atomic
+            def create(self, *args, **kwargs):
+                try:
+                    return super(OrderViewSet, self).create(*args, **kwargs)
+                except DomainException as e:
+                    transaction.set_rollback(True)
+                    return Response(
+                        {'detail': str(e.code)},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+        ```
+        
+        --
+        count:
+        <figcaption>*In "real" code we'd use a general mechanism - like DRF's exception handlers</figcaption>
+
+        ---
+        class: light-theme
+
+        Let's now define those new exceptions:
+
+        ```python 
+        # orders/services/errors.py
+        from config.errors import DomainException
+
+
+        class OutOfStock(DomainException):
+            ...
+
+
+        class InsufficientStock(DomainException):
+            ...
+        ```
+        ---
+        class: light-theme
+
+        And let's use those in the relevant services:
+
+        ```python
+        # orders/services/product.py
+        @di.implements(interface=ReserveStock)
+        def reserve_stock(product: Product, quantity: int) -> Stock:
+            stock = _validate_stock_exists(product) or product.stock
+
+            if (stock.quantity - stock.reserved_quantity) < quantity:
+                raise InsufficientStock
+
+            stock.reserved_quantity += quantity
+            stock.save()
+            return stock
+
+
+        @di.implements(interface=ReconcilliateStock)
+        def reconcilliate_stock(product: Product) -> Stock:
+            stock = _validate_stock_exists(product) or product.stock
+
+            stock.quantity = query_wms_stock(product.ean)
+            stock.save()
+
+            notify_allocation_team(product, stock)
+            return stock
+
+
+        def _validate_stock_exists(product: Product):
+            if not product.stock:
+                raise OutOfStock
+        ```
+        ---
+        class: light-theme
+        
+        Leaves us with a really thin serializer:
+        
+        ```python
+        class OrderSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Order
+                fields = ['product', 'quantity']
+
+            def create(self, validated_data):
+                return Order.place(
+                    user=self.context['request'].user,
+                    **validated_data,
+                )
+        ```
+        ---
+        class: light-theme
+    
+        # .center[What did we gain?]
+
+        ### There are certain benefits to that approach:
+
+        --
+        count: false
+        - Transactions are great on their own - there's no real reason NOT to use them
+        
+        --
+        count: false
+        - Validation and acting upon the data live in close proximity to each other
+        
+        --
+        count: false
+        - Errors are expressed in the language of the domain
+
+        --
+        count: false
+        - Services become reusable and stackable
+
+        --
+        count: false
+        - To my taste: better readability
+        
+        ---
+        class: light-theme
+        
+        # .center[What about the 3rd party stuff?]
+
+        --
+        count: false
+
+        ### Same drill, really
+
+        --
+        count: false
+        We can rework it to create a boundary provided by the interface. We can then inject them intead of passing directly to services.
+        
+        --
+        count: false
+        This will make our lives easier in the future.
+
+        ---
+        class: light-theme
+        
+        # .center[Where should the dependencies live?]
+
+        While the implementations and 3rd party services used may change, they should be fairly stable as far as business core of the app is concerned.
+        We're try to neatly arrange interfaces so that all dependencies may be found and previewed with ease.
+
+        --
+        count: false
+        This means the place where protocols are defined should rarely be the place we provide the implementation.
+
+        --
+        count: false
+        This also for the service names we won't go with `Concrete3rdPartyNameClientCall` while definig services.
+        We'll focus on the responsibility of the dependency instead.
+
+        --
+        count: false
+        Let's define the interfaces then.
+
+        ---
+        class: light-theme
+
+        # .center[The `common` app]
+
+        What is the most reasonable place to put the interfaces then? It is a package that's stable and preferrably
+        one on which the business code will end up depending anyway. We'll go with the `common` app:
+
+        ```
+        common/
+        | migrations/
+        | ports/
+        | | __init__.py
+        | | crm.py
+        | | email.py
+        | | wms.py
+        | __init__.py
+        | admin.py
+        | apps.py
+        | models.py
+        ``` 
+
+        ---
+        class: light-theme
+
+        # .center[Ports]
+
+        ```python
+        # common/ports/crm.py
+        class SendCrmEvent(Protocol):
+            def __call__(self, message: str, obj):
+                ...
+
+        # common/ports/email.py
+        class SendMail(Protocol):
+            def __call__(self, email: str, message: str):
+                ...
+
+        # common/ports/wms.py
+        class SendOrder(Protocol):
+            def __call__(
+                self, email: str, oid: int, quantity: int, ean: str
+            ):
+                ...
+
+
+        class QueryStock(Protocol):
+            def __call__(self, ean: str): 
+                ...
+        ```
+        ---
+        class: light-theme
+
+        # .center[Adapters]
+        
+        Adapters, on the other hand, we'll place where they're most relevant.
+        They will depend on both the interfaces of the common app as well as the models/business code.
+        
+        --
+        count: false
+        - The crm event will land in the crm app.
+        
+        --
+        count: false
+        - Emails will go in the notifications app.
+
+        --
+        count: false
+        - WMS client stuff will go in the orders app.
+
+        ---
+        class: light-theme
+
+        # .center[Port/Adapter Layout]
+        ```
+        common/
+        | ports/
+        | | crm.py
+        | | email.py
+        | | wms.py
+        crm/
+        | adapters/
+        | | crm.py
+        notifications/
+        | adapters/
+        | | emails.py
+         models.py
+        orders/
+        | adapters/
+        | | wms.py
+        ```
+        ---
+        class: light-theme
+
+        # .center[Implementations]
+        
+        Let's provide some dummy examples of implementations for reference:
 
     </textarea>
     <script src="https://remarkjs.com/downloads/remark-latest.min.js">

@@ -12,6 +12,7 @@ dependencies = [
     "django-extensions>=3.2.3",
     "djangorestframework-simplejwt>=5.3.1",
     "tinyinject>=0.4.0",
+    "inflection>=0.5.1",
 ]
 requires-python = "==3.12.*"
 readme = "README.md"

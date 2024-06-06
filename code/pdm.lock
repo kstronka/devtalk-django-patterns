@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.1"
-content_hash = "sha256:e1fb6213c6c4bd1e68941cc728d7e95001e8851c768fd38801a9a39242450856"
+content_hash = "sha256:e6caaa22dd95c4e6a8ea65944eeca2d1cccb565a5f41721a3a8b01f2aed24541"
 
 [[package]]
 name = "asgiref"
@@ -113,6 +113,17 @@ dependencies = [
 files = [
     {file = "Faker-25.5.0-py3-none-any.whl", hash = "sha256:edb85040a47ef1b30ccd8c4b6f07ee3cb4bd64aab1483be4efe75816ee2e2e36"},
     {file = "Faker-25.5.0.tar.gz", hash = "sha256:84d454fc9fef0b73428e00bdf45a36c04568c75f22727e990071580840cfbb84"},
+]
+
+[[package]]
+name = "inflection"
+version = "0.5.1"
+requires_python = ">=3.5"
+summary = "A port of Ruby on Rails inflector to Python"
+groups = ["default"]
+files = [
+    {file = "inflection-0.5.1-py2.py3-none-any.whl", hash = "sha256:f38b2b640938a4f35ade69ac3d053042959b62a0f1076a5bbaa1b9526605a8a2"},
+    {file = "inflection-0.5.1.tar.gz", hash = "sha256:1a29730d366e996aaacffb2f1f1cb9593dc38e2ddd30c91250c6dde09ea9b417"},
 ]
 
 [[package]]
