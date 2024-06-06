@@ -18,8 +18,8 @@ class Product(models.Model):
 
 
     @di.require_kwargs(service=ReconcilliateStock)
-    def reconcilliate(self, quantity: int, *, service: ReserveStock) -> 'Stock':
-        return service(self, quantity)
+    def reconcilliate(self, *, service: ReserveStock) -> 'Stock':
+        return service(self)
 
 
 class StockManager(models.Manager):

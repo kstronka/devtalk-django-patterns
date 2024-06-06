@@ -396,7 +396,6 @@
         
         ```python
         # models.py        
-
         class OrderManager(models.Manger):
             def place_order(self, user, product, quantity):
                 order = self.create(
@@ -407,15 +406,18 @@
 
                 stock = Stock.objects.for_product(product) 
 
-                wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
+                wms_order = send_wms_order(
+                    user.email, order.id, quantity, product.ean
+                )
                 if not wms_order['success']:
                     stock.quantity = query_wms_stock(product.ean)
                     stock.save()
 
-                    order.delete() 
+                    order.quantity = 0
+                    order.save()
                     notify_allocation_team(product, stock)
                     send_crm_event('order_failed', order)
-                    return None
+                    return order
 
                 stock.reserved_quantity += order.quantity
                 stock.save()
@@ -477,17 +479,13 @@
 
         ```python
         # services/order.py
-
         def place_order(user, product: Product, quantity: int):
-            order = Order.objects.create(
-                user=user,
-                product=product,
-                quantity=quantity,
-            )
-
+            order = Order.objects.create(...)
             stock = Stock.objects.for_product(product)
 
-            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
+            wms_order = send_wms_order(
+                user.email, order.id, quantity, product.ean
+            )
 
             if not wms_order['success']:
                 stock.quantity = query_wms_stock(product.ean)
@@ -495,20 +493,22 @@
 
                 notify_allocation_team(product, stock)
                 send_crm_event('order_failed', order)
-                return None
+
+                order.quantity = 0
+                order.save()
+                return order
 
             stock.reserved_quantity += order.quantity
             stock.save()
 
             send_mail(user.email, 'Your order was placed')
             send_crm_event('order_created', order)
-
             return order
         ```
         ---
         class: light-theme
 
-        While the serializer unsurprisingly looks like this:
+        While the serializer - unsurprisingly - looks like this:
 
         ```python
         # serializers.py
@@ -606,13 +606,18 @@
                 quantity=quantity,
             )
 
-            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
+            wms_order = send_wms_order(
+                user.email, order.id, quantity, product.ean
+            )
 
             if not wms_order['success']:
                 reconcilliate_stock(product)
 
                 send_crm_event('order_failed', order)
-                return None
+
+                order.quantity = 0
+                order.save()
+                return order
 
             reserve_stock(product, quantity)
 
@@ -697,7 +702,9 @@
                 quantity=quantity,
             )
 
-            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
+            wms_order = send_wms_order(
+                user.email, order.id, quantity, product.ean
+            )
 
             if not wms_order['success']:
                 reconcilliate_stock(product)
@@ -762,9 +769,9 @@
 
             @di.require_kwargs(service=ReconcilliateStock)
             def reconcilliate(
-                self, quantity: int, *, service: ReserveStock
+                self, *, service: ReserveStock
             ) -> 'Stock':
-                return service(self, quantity)
+                return service(self)
         ```
 
         ---
@@ -802,11 +809,11 @@
 
         @di.implements(interface=PlaceOrder)
         def place_order(user, product: Product, quantity: int):
-            order = Order.objects.create( 
-                user=user, product=product, quantity=quantity
-            )
+            order = Order.objects.create(...)
 
-            wms_order = send_wms_order(user.email, order.id, quantity, product.ean)
+            wms_order = send_wms_order(
+                user.email, order.id, quantity, product.ean
+            )
 
             if not wms_order['success']:
                 product.reconcilliate()
@@ -825,6 +832,7 @@
         ---
         class: light-theme
 
+        ### Then, the serializer:
         ```python
         # orders/serializer.py
 
@@ -1138,7 +1146,7 @@
                 ...
 
         # common/ports/wms.py
-        class SendOrder(Protocol):
+        class SendOrder(Protocol) -> WMSResponse:
             def __call__(
                 self, email: str, oid: int, quantity: int, ean: str
             ):
@@ -1146,7 +1154,7 @@
 
 
         class QueryStock(Protocol):
-            def __call__(self, ean: str): 
+            def __call__(self, ean: str) -> int: 
                 ...
         ```
         ---
@@ -1196,6 +1204,145 @@
         # .center[Implementations]
         
         Let's provide some dummy examples of implementations for reference:
+
+        ```python
+        # crm/adapters/crm.py
+        @di.implements(interface=SendCrmEvent)
+        def _send_event_impl(message: str, obj):
+            logger.info(f"Send CRM event {message} for {obj}")
+
+        # notification/adapters/emails.py
+        @di.implements(interface=SendMail)
+        def _send_mail_impl(email: str, message: str):
+            logger.info(f"Send email to {email}, message: {message}")
+
+        # orders/adapters/wms.py
+        @di.implements(interface=SendOrder)
+        def _send_order_impl(
+            email: str, oid: int, quantity: int, ean: str
+        ) -> WMSResponse:
+            logger.info(f'POST WMS: {email=}, {oid=}, {quantity=}, {ean=}')
+            return {'success': True}
+
+        @di.implements(interface=QueryStock)
+        def _query_stock_impl(ean: str) -> int:
+            logger.info(f'QUERY WMS: {ean=}')
+            return 100  # JIT delivery rocks
+        ```
+        ---
+        class: light-theme
+        ### Finally, let's plug our new toys in:
+
+        ```python
+        # orders/services/product.py      
+   
+        @di.implements(interface=ReconcilliateStock)
+        @di.require_kwargs(query_wms_stock=QueryStock)
+        def reconcilliate_stock(
+            product: Product, *, query_wms_stock: QueryStock
+        ) -> Stock:
+            stock = _validate_stock_exists(product) or product.stock
+
+            stock.quantity = query_wms_stock(product.ean)
+            stock.save()
+
+            notify_allocation_team(product, stock)
+            return stock
+        ```
+        
+        ---
+        class: light-theme
+
+        ```python
+        @di.implements(interface=PlaceOrder)
+        @di.require_kwargs(
+            send_mail=SendMail,
+            send_wms_order=SendOrder,
+            send_crm_event=SendCrmEvent,
+        )
+        def place_order(...):
+            order = Order.objects.create(
+                user=user,
+                product=product,
+                quantity=quantity,
+            )
+
+            wms_order = send_wms_order(
+                user.email, order.id, quantity, product.ean
+            )
+
+            if not wms_order['success']:
+                product.reconcilliate()
+
+                send_crm_event('order_failed', order)
+                order.quantity = 0
+                order.save()
+                return order
+
+            product.reserve(quantity)
+
+            send_mail(user.email, 'Your order was placed')
+            send_crm_event('order_created', order)
+            return order
+
+        ```
+        ---
+        class: light-theme
+
+        # .center[What did we gain?]
+        
+        --
+        count: false
+        - Ease of testing - fixtures can override adapters! 
+
+        --
+        count: false
+        - Decoupling
+
+        --
+        count: false
+        - Complete inversion of dependency
+
+        --
+        count: false
+        - Clear definition of project-level ports - it's easy to read
+
+        ---
+        class: light-theme
+
+        # .center[Summary of patterns]
+
+        --
+        count: false
+        ** Service Layer **
+
+        For organizing the business domain of the app, that's almost* free of any dependencies.
+        Additionally, we expressed interactions of the app in terms of the domain language over CRUD style updates.
+        Very characteristic of domain driven design.
+        <figcaption>We could make it so if we abstracted the ORM layer with an interface. But that's overkill in django.</figcaption>
+
+        --
+        count: false
+        ** Interfaces, ports and adapters **
+
+        This is thinking that characterizes statically typed languages like Java and C++ more. Ports and adapters are common in hexagonal architectures.
+        Making hard divisions between components of the app provides multiple benefits - like for example enabling dependency inversion and injection.
+
+        --
+        count: false
+        ** Domain Exception **
+        
+        Here we leveraged transaction isolation and custom exceptions to our advantage.
+        Arguably it's much easier to throw an exception and force a rollback when somethings wrong instead of predicting it based on input.
+        
+        ???
+        Mention the universal language of ddd
+
+        ---
+        class: center, middle, light-theme
+
+        # That is all folks - happy coding!
+
 
     </textarea>
     <script src="https://remarkjs.com/downloads/remark-latest.min.js">

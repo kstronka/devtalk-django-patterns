@@ -8,3 +8,5 @@ class OrdersConfig(AppConfig):
     def ready(self):
         from .services import order  # noqa
         from .services import product  # noqa
+        from .adapters import wms  # noqa
+
